@@ -60,10 +60,33 @@ public class MusicUtils {
 		}
 		intent.putExtra("withtabs", true);
 		intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+		/**
+		 * Intent.FLAG_ACTIVITY_CLEAR_TOP
+		 * If set, and the activity being launched is already running in the
+		 * current task, then instead of launching a new instance of that
+		 * activity, all of the other activities on top of it will be closed and
+		 * this Intent will be delivered to the (now on top) old activity as a
+		 * new Intent.
+		 */
 		activity.startActivity(intent);
 		activity.finish();
 		activity.overridePendingTransition(0, 0);
-
+		/**
+		 * Call immediately after one of the flavors of startActivity(Intent) or
+		 * finish to specify an explicit transition animation to perform next.
+		 * 
+		 * As of android.os.Build.VERSION_CODES.JELLY_BEAN an alternative to
+		 * using this with starting activities is to supply the desired
+		 * animation information through a ActivityOptions bundle to or a
+		 * related function. This allows you to specify a custom animation even
+		 * when starting an activity from outside the context of the current top
+		 * activity.
+		 * 
+		 * Parameters: enterAnim A resource ID of the animation resource to use
+		 * for the incoming activity. Use 0 for no animation. exitAnim A
+		 * resource ID of the animation resource to use for the outgoing
+		 * activity. Use 0 for no animation.
+		 */
 	}
 
 }
