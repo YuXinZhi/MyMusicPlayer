@@ -71,5 +71,21 @@
         android:text="@string/playlists_menu"
         android:textAppearance="?android:attr/textAppearanceSmall"
         android:textColor="@color/tab_indicator_text" />
+    <TextView
+        android:id="@+id/nowplayingtab"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginLeft="3dip"
+        android:layout_marginRight="-3dip"
+        android:layout_weight="1"
+        android:background="@drawable/buttonbarbackground"
+        android:drawableTop="@drawable/ic_tab_playback"
+        android:focusable="true"
+        android:gravity="center"
+        android:paddingBottom="2dip"
+        android:paddingTop="7dip"
+        android:text="@string/nowplaying_title"
+        android:textAppearance="?android:attr/textAppearanceSmall"
+        android:textColor="@color/tab_indicator_text" />
 
 </TabWidget>
