@@ -1,27 +1,48 @@
 package com.example.mymusicplayer.ui;
 
+import javax.security.auth.PrivateCredentialPermission;
+
+import com.example.mymusicplayer.IMediaPlaybackService;
+import com.example.mymusicplayer.R;
 import com.example.mymusicplayer.utils.MusicUtils;
 
-import android.R;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.RemoteException;
+import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.Window;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
+import android.widget.SeekBar;
+import android.widget.SeekBar.OnSeekBarChangeListener;
+import android.widget.TextView;
 
 public class MediaPlaybackActivity extends Activity
 		implements MusicUtils.Defs, View.OnTouchListener, View.OnLongClickListener {
 
+	private boolean mDeviceHasDpad;
+	private IMediaPlaybackService mService = null;
+	private boolean mFromTouch = false;
+	private long mLastSeekEventTime;
+	private long mDuration;
 	private Worker mAlbumArtWorker;
+	private AlbumArtHandler mAlbumArtHandler;
+
+	private RepeatingImageButton mPrevButton;
+	private ImageButton mPauseButton;
+	private RepeatingImageButton mNextButton;
 
 	public MediaPlaybackActivity() {
 	}
@@ -34,10 +55,107 @@ public class MediaPlaybackActivity extends Activity
 		 */
 		setVolumeControlStream(AudioManager.STREAM_MUSIC);
 
+		mAlbumArtWorker = new Worker("album art work");
+		mAlbumArtHandler = new AlbumArtHandler(mAlbumArtWorker.getLooper());
+		// Enable extended window features. This is a convenience for calling
+		// getWindow().requestFeature().
+		// 设置MediaPlaybackActivity布局
+		requestWindowFeature(Window.FEATURE_NO_TITLE);
+		setContentView(R.layout.audio_player);
+
+		mCurrentTime = (TextView) findViewById(R.id.currenttime);
+		mTotalTime = (TextView) findViewById(R.id.totaltime);
+		mProgress = (ProgressBar) findViewById(android.R.id.progress);
+		mAlbum = (ImageView) findViewById(R.id.album);
+		mArtistName = (TextView) findViewById(R.id.artistname);
+		mAlbumName = (TextView) findViewById(R.id.albumname);
+		mTrackName = (TextView) findViewById(R.id.trackname);
+
+		// 设置三个图标（歌手，专辑，歌名）的监听
+		View v = (View) mArtistName.getParent();
+		v.setOnTouchListener(this);
+		v.setOnLongClickListener(this);
+
+		v = (View) mAlbumName.getParent();
+		v.setOnTouchListener(this);
+		v.setOnLongClickListener(this);
+
+		v = (View) mTrackName.getParent();
+		v.setOnTouchListener(this);
+		v.setOnLongClickListener(this);
+
+		// 设置播放按钮的监听
+		mPrevButton = (RepeatingImageButton) findViewById(R.id.prev);
+		mPrevButton.setOnClickListener(mPrevListener);
+		mPrevButton.setRepeatListener(mRewListener, 260);
+		mPauseButton = (ImageButton) findViewById(R.id.pause);
+		mPauseButton.requestFocus();
+		mPauseButton.setOnClickListener(mPauseListener);
+		mNextButton = (RepeatingImageButton) findViewById(R.id.next);
+		mNextButton.setOnClickListener(mNextListener);
+		mNextButton.setRepeatListener(mFfwdListener, 260);
+
+		// 判断是否有方向键盘
+		mDeviceHasDpad = (getResources().getConfiguration().navigation == Configuration.NAVIGATION_DPAD);
+
+		if (mProgress instanceof SeekBar) {
+			SeekBar seeker = (SeekBar) mProgress;
+
+			seeker.setOnSeekBarChangeListener(mSeekListener);
+		}
+
 	}
 
-	private ImageView mAlbum;
+	// 歌曲进度条的监听
+	private OnSeekBarChangeListener mSeekListener = new OnSeekBarChangeListener() {
 
+		@Override
+		public void onStartTrackingTouch(SeekBar seekBar) {
+			mLastSeekEventTime = 0;
+			mFromTouch = true;
+		}
+
+		@Override
+		public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+			if (!fromUser || (mService == null)) {
+				return;
+			}
+			long now = SystemClock.elapsedRealtime();
+			// 两次时间差
+			if ((now - mLastSeekEventTime) > 250) {
+				mLastSeekEventTime = now;
+				// 当前歌曲播放的时间
+				mPosOverride = mDuration * progress / 1000;
+				try {
+					mService.seek(mPosOverride);
+				} catch (RemoteException e) {
+					e.printStackTrace();
+				}
+
+				// trackball(轨迹球；追踪球) event, allow progress updates
+				if (!mFromTouch) {
+					refreshNow();
+					mPosOverride = -1;
+				}
+
+			}
+		}
+
+		@Override
+		public void onStopTrackingTouch(SeekBar seekBar) {
+			mPosOverride = -1;
+			mFromTouch = false;
+		}
+	};
+
+	private ImageView mAlbum;
+	private TextView mCurrentTime;
+	private TextView mTotalTime;
+	private TextView mArtistName;
+	private TextView mAlbumName;
+	private TextView mTrackName;
+	private ProgressBar mProgress;
+	private long mPosOverride = -1;
 	private static final int REFRESH = 1;
 	private static final int QUIT = 2;
 	private static final int GET_ALBUM_ART = 3;
@@ -48,6 +166,19 @@ public class MediaPlaybackActivity extends Activity
 	}
 
 	private long refreshNow() {
+		if (mService == null) {
+			return 500;
+		}
+
+		try {
+			long pos = mPosOverride < 0 ? mService.position() : mPosOverride;
+			if ((pos >= 0) && (mDuration > 0)) {
+				mCurrentTime.setText(MusicUtils.makeTimeString(this, pos / 1000));
+			}
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+
 		return 0;
 	}
 
@@ -100,15 +231,22 @@ public class MediaPlaybackActivity extends Activity
 		public void handleMessage(Message msg) {
 			long albumid = ((AlbumSongIdWrapper) msg.obj).albumid;
 			long songid = ((AlbumSongIdWrapper) msg.obj).songid;
-			if (msg.what == GET_ALBUM_ART && (mAlbumId != albumid || albumid < 0)) {\
-				// while decoding the new image, show the default album art
+			if (msg.what == GET_ALBUM_ART && (mAlbumId != albumid || albumid < 0)) {
+				// 当解码一张新图片时，显示默认专辑图片
 				Message numsg = mHandler.obtainMessage(ALBUM_ART_DECODED, null);
 				mHandler.removeMessages(ALBUM_ART_DECODED);
 				mHandler.sendMessageDelayed(numsg, 300);
-				// Don't allow default artwork here, because we want to fall
-				// back to song-specific
-				// album art if we can't find anything for the album.
-				Bitmap bm=MusicUtils.getArtWork(MediaPlaybackActivity.this,songid,albumid,false);
+				// 这里不允许默认专辑封面，因为我们需要特定的专辑封面，如果我们找不到专辑的任何信息
+				Bitmap bm = MusicUtils.getArtWork(MediaPlaybackActivity.this, songid, albumid, false);
+				if (bm == null) {
+					bm = MusicUtils.getArtWork(MediaPlaybackActivity.this, songid, -1);
+					albumid = -1;
+				}
+				if (bm != null) {
+					numsg = mHandler.obtainMessage(ALBUM_ART_DECODED, bm);
+					mHandler.removeMessages(ALBUM_ART_DECODED);
+					mHandler.sendMessage(numsg);
+				}
 			}
 
 		}

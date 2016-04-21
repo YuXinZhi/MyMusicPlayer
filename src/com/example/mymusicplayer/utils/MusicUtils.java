@@ -2,6 +2,7 @@ package com.example.mymusicplayer.utils;
 
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStream;
 
 import com.example.mymusicplayer.R;
@@ -15,11 +16,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.BitmapFactory.Options;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
-import android.renderscript.ScriptGroup.Input;
 
 public class MusicUtils {
 
@@ -85,6 +84,7 @@ public class MusicUtils {
 		case R.id.nowplayingtab:
 			intent = new Intent(activity, MediaPlaybackActivity.class);
 			activity.startActivity(intent);
+			// 失败并返回
 		default:
 			break;
 		}
@@ -99,31 +99,30 @@ public class MusicUtils {
 		 */
 		activity.startActivity(intent);
 		activity.finish();
-		activity.overridePendingTransition(0,
-				0);/**
-					 * Call immediately after one of the flavors of
-					 * startActivity(Intent) or finish to specify an explicit
-					 * transition animation to perform next.
-					 * 
-					 * As of android.os.Build.VERSION_CODES.JELLY_BEAN an
-					 * alternative to using this with starting activities is to
-					 * supply the desired animation information through a
-					 * ActivityOptions bundle to or a related function. This
-					 * allows you to specify a custom animation even when
-					 * starting an activity from outside the context of the
-					 * current top activity.
-					 * 
-					 * Parameters: enterAnim A resource ID of the animation
-					 * resource to use for the incoming activity. Use 0 for no
-					 * animation. exitAnim A resource ID of the animation
-					 * resource to use for the outgoing activity. Use 0 for no
-					 * animation.
-					 */
+		activity.overridePendingTransition(0, 0);
+
+		/**
+		 * Call immediately after one of the flavors of startActivity(Intent) or
+		 * finish to specify an explicit transition animation to perform next.
+		 * 
+		 * As of android.os.Build.VERSION_CODES.JELLY_BEAN an alternative to
+		 * using this with starting activities is to supply the desired
+		 * animation information through a ActivityOptions bundle to or a
+		 * related function. This allows you to specify a custom animation even
+		 * when starting an activity from outside the context of the current top
+		 * activity.
+		 * 
+		 * Parameters: enterAnim A resource ID of the animation resource to use
+		 * for the incoming activity. Use 0 for no animation. exitAnim A
+		 * resource ID of the animation resource to use for the outgoing
+		 * activity. Use 0 for no animation.
+		 */
 	}
 
 	private static final Uri sArtworkUri = Uri.parse("content://media/external/audio/albumart");
 	private static final BitmapFactory.Options sBitmapOptionsCache = new BitmapFactory.Options();
 	private static final BitmapFactory.Options sBitmapOptions = new BitmapFactory.Options();
+	private static Bitmap mCachedBit = null;
 	static {
 		// for the cache,
 		// 565 is faster to decode and display
@@ -140,13 +139,13 @@ public class MusicUtils {
 	/**
 	 * 获得指定专辑的封面,-1代表未知专辑
 	 */
-	private static Bitmap getArtWork(Context context, long song_id, long album_id) {
+	public static Bitmap getArtWork(Context context, long song_id, long album_id) {
 
 		return getArtWork(context, song_id, album_id, true);
 
 	}
 
-	public static Bitmap getArtWork(Context context, long song_id, long album_id, boolean alloweddefalut) {
+	public static Bitmap getArtWork(Context context, long song_id, long album_id, boolean allowdefalut) {
 
 		if (album_id < 0) {
 			// 如果专辑没有在数据库中，那么就从直接从文件获得
@@ -156,7 +155,7 @@ public class MusicUtils {
 					return bm;
 				}
 			}
-			if (alloweddefalut) {
+			if (allowdefalut) {
 				return getDefaultArtwork(context);
 			}
 			return null;
@@ -168,12 +167,56 @@ public class MusicUtils {
 			InputStream in = null;
 			try {
 				in = res.openInputStream(uri);
-
 				return BitmapFactory.decodeStream(in, null, sBitmapOptions);
 			} catch (FileNotFoundException e) {
-				e.printStackTrace();
+				// 专辑图片的缩略图不存的，可能被删除或压根没有
+				Bitmap bm = getArtworkFromFile(context, song_id, album_id);
+				if (bm != null) {
+					if (bm.getConfig() == null) {
+						bm = bm.copy(Bitmap.Config.RGB_565, false);
+						if (bm == null && allowdefalut) {
+							return getDefaultArtwork(context);
+						}
+					}
+				} else if (allowdefalut) {
+					bm = getDefaultArtwork(context);
+				}
+				return bm;
+
+			} finally {
+				try {
+					if (in != null) {
+						in.close();
+					}
+				} catch (IOException e) {
+				}
 			}
 		}
+		return null;
+
+	}
+
+	// 从指定文件获取专辑封面
+	private static Bitmap getArtworkFromFile(Context context, long songid, long albumid) {
+		Bitmap bm = null;
+		if (albumid < 0 && songid < 0) {
+			throw new IllegalArgumentException("必须指定一个专辑或歌曲id");
+		}
+
+		try {
+			Uri uri = Uri.parse("content://media/external/audio/media/" + songid + "/albumart");
+			ParcelFileDescriptor pfd = context.getContentResolver().openFileDescriptor(uri, "r");
+			if (pfd != null) {
+				FileDescriptor fd = pfd.getFileDescriptor();
+				bm = BitmapFactory.decodeFileDescriptor(fd);
+			}
+		} catch (IllegalStateException ex) {
+		} catch (FileNotFoundException ex) {
+		}
+		if (bm != null) {
+			mCachedBit = bm;
+		}
+		return bm;
 	}
 
 	private static Bitmap getDefaultArtwork(Context context) {
