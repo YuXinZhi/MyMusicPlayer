@@ -2,17 +2,24 @@ package com.example.mymusicplayer.ui;
 
 import com.example.mymusicplayer.IMediaPlaybackService;
 import com.example.mymusicplayer.R;
+import com.example.mymusicplayer.service.MediaPlaybackService;
 import com.example.mymusicplayer.utils.MusicUtils;
 import com.example.mymusicplayer.utils.MusicUtils.ServiceToken;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.SearchManager;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.ContentUris;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.res.Configuration;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -257,7 +264,6 @@ public class MediaPlaybackActivity extends Activity
 			}
 		}
 		updateTrackInfo();
-
 	}
 
 	private View.OnClickListener mPauseListener = new View.OnClickListener() {
@@ -373,6 +379,22 @@ public class MediaPlaybackActivity extends Activity
 			mFromTouch = false;
 		}
 	};
+	private BroadcastReceiver mStatsusListener = new BroadcastReceiver() {
+
+		@Override
+		public void onReceive(Context context, Intent intent) {
+			String action = intent.getAction();
+			if (action.equals(MediaPlaybackService.META_CHANGED)) {
+				// 重新绘制艺术家/歌名信息，设置新的进度最大值
+				updateTrackInfo();
+				setPauseButtonImage();
+				queueNextFresh(1);
+			} else if (action.equals(MediaPlaybackService.PLAYSTATE_CHANGED)) {
+				setPauseButtonImage();
+			}
+		}
+
+	};
 
 	@Override
 	public void onStart() {
@@ -380,7 +402,89 @@ public class MediaPlaybackActivity extends Activity
 		paused = false;
 
 		mToken = MusicUtils.bindToService(this, osc);
+		if (mToken != null) {
+			// 出错
+			mHandler.sendEmptyMessage(QUIT);
+		}
+
+		IntentFilter filter = new IntentFilter();
+		filter.addAction(MediaPlaybackService.PLAYSTATE_CHANGED);
+		filter.addAction(MediaPlaybackService.META_CHANGED);
+		registerReceiver(mStatsusListener, filter);
+		updateTrackInfo();
+		long next = refreshNow();
+		queueNextFresh(next);
 	};
+
+	@Override
+	protected void onStop() {
+		paused = false;
+		mHandler.removeMessages(REFRESH);
+		unregisterReceiver(mStatsusListener);
+		MusicUtils.unbindFromService(mToken);
+		mService = null;
+		super.onStop();
+	}
+
+	@Override
+	public void onNewIntent(Intent intent) {
+		super.onNewIntent(intent);
+	}
+
+	@Override
+	public void onResume() {
+		super.onResume();
+		updateTrackInfo();
+		setPauseButtonImage();
+	}
+
+	@Override
+	public void onDestroy() {
+		mAlbumArtWorker.quit();
+		super.onDestroy();
+	};
+
+	/**
+	 * Called when an activity you launched exits, giving you the requestCode
+	 * you started it with, the resultCode it returned, and any additional data
+	 * from it. The resultCode will be RESULT_CANCELED if the activity
+	 * explicitly returned that, didn't return any result, or crashed during its
+	 * operation.
+	 * 
+	 * You will receive this call immediately before onResume() when your
+	 * activity is re-starting.
+	 * 
+	 * This method is never invoked if your activity sets noHistory to true.
+	 * 
+	 * Parameters requestCode The integer request code originally supplied to
+	 * startActivityForResult(), allowing you to identify who this result came
+	 * from. resultCode The integer result code returned by the child activity
+	 * through its setResult(). data An Intent, which can return result data to
+	 * the caller (various data can be attached to Intent "extras").
+	 * 
+	 */
+	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
+		if (resultCode != RESULT_OK) {
+			return;
+		}
+		
+		switch (requestCode) {
+		case NEW_PLAYLIST:
+			Uri uri=intent.getData();
+			if (uri!=null) {
+				long[] list=new long[1];
+				list[0]=MusicUtils.getCurrentAudioId();
+				int playlist=Integer.parseInt(uri.getLastPathSegment());
+				MusicUtils.addToPlayList(this,list,playlist);
+				
+			}
+			break;
+
+		default:
+			break;
+		}
+	}
 
 	private ImageView mAlbum;
 	private TextView mCurrentTime;
@@ -578,41 +682,113 @@ public class MediaPlaybackActivity extends Activity
 
 	}
 
-	/**
-	 * 轮询器 android.os.Looper
-	 * 
-	 * Class used to run a message loop for a thread. Threads by default do not
-	 * have a message loop associated with them; to create one, call prepare in
-	 * the thread that is to run the loop, and then loop to have it process
-	 * messages until the loop is stopped.
-	 * 
-	 * Most interaction with a message loop is through the Handler class.
-	 * 
-	 * This is a typical example of the implementation of a Looper thread, using
-	 * the separation of prepare and loop to create an initial Handler to
-	 * communicate with the Looper.
-	 * 
-	 * class LooperThread extends Thread { public Handler mHandler;
-	 * 
-	 * public void run() { Looper.prepare();
-	 * 
-	 * mHandler = new Handler() { public void handleMessage(Message msg) { //
-	 * process incoming messages here } };
-	 * 
-	 * Looper.loop(); } }
-	 * 
-	 */
-
 	@Override
-	public boolean onLongClick(View v) {
-		return false;
+	public boolean onLongClick(View view) {
+
+		CharSequence title = null;
+		String mime = null;
+		String query = null;
+		String artist;
+		String album;
+		String song;
+		long audioid;
+
+		try {
+			artist = mService.getArtistName();
+			album = mService.getAlbumName();
+			song = mService.getTrackName();
+			audioid = mService.getAudioId();
+		} catch (RemoteException ex) {
+			return true;
+		} catch (NullPointerException ex) {
+			// service可能不存在
+			return true;
+		}
+
+		if (MediaStore.UNKNOWN_STRING.equals(album) && MediaStore.UNKNOWN_STRING.equals(artist) && song != null
+				&& song.startsWith("recording")) {
+			// 没有音乐
+			return false;
+		}
+
+		if (audioid < 0) {
+			return false;
+		}
+
+		Cursor c = MusicUtils.query(this,
+				ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, audioid),
+				new String[] { MediaStore.Audio.Media.IS_MUSIC }, null, null, null);
+		boolean ismusic = true;
+		if (c != null) {
+			if (c.moveToFirst()) {
+				ismusic = c.getInt(0) != 0;
+			}
+			c.close();
+		}
+		if (!ismusic) {
+			return false;
+		}
+
+		boolean knownartist = (artist != null) && !MediaStore.UNKNOWN_STRING.equals(artist);
+
+		boolean knownalbum = (album != null) && !MediaStore.UNKNOWN_STRING.equals(album);
+
+		// mediasearch "使用以下工具搜索“
+
+		if (knownartist && view.equals(mArtistName.getParent())) {
+			title = artist;
+			query = artist;
+			mime = MediaStore.Audio.Artists.ENTRY_CONTENT_TYPE;
+		} else if (knownalbum && view.equals(mAlbumName.getParent())) {
+			title = album;
+			if (knownartist) {
+				query = artist + " " + album;
+			} else {
+				query = album;
+			}
+			mime = MediaStore.Audio.Albums.ENTRY_CONTENT_TYPE;
+		} else if (view.equals(mTrackName.getParent()) || !knownartist || !knownalbum) {
+			if ((song == null) || MediaStore.UNKNOWN_STRING.equals(song)) {
+				// A popup of the form "Search for null/'' using ..." is pretty
+				// unhelpful, plus, we won't find any way to buy it anyway.
+				return true;
+			}
+
+			title = song;
+			if (knownartist) {
+				query = artist + " " + song;
+			} else {
+				query = song;
+			}
+			mime = "audio/*"; // the specific type doesn't matter, so don't
+								// bother retrieving it
+		} else {
+			throw new RuntimeException("shouldn't be here");
+		}
+		title = getString(R.string.mediasearch, title);
+
+		Intent i = new Intent();
+		i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+		i.setAction(MediaStore.INTENT_ACTION_MEDIA_SEARCH);
+		i.putExtra(SearchManager.QUERY, query);
+		if (knownartist) {
+			i.putExtra(MediaStore.EXTRA_MEDIA_ARTIST, artist);
+		}
+		if (knownalbum) {
+			i.putExtra(MediaStore.EXTRA_MEDIA_ALBUM, album);
+		}
+		i.putExtra(MediaStore.EXTRA_MEDIA_TITLE, song);
+		i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, mime);
+
+		startActivity(Intent.createChooser(i, title));
+		return true;
 	}
 
 	@Override
 	public boolean onTouch(View v, MotionEvent event) {
 		return false;
 	}
-	
+
 	private void updateTrackInfo() {
 		if (mService == null) {
 			return;

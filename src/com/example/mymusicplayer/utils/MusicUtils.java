@@ -15,11 +15,13 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.ContentUris;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
@@ -28,6 +30,8 @@ import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.provider.MediaStore;
+import android.util.Log;
+import android.widget.Toast;
 
 public class MusicUtils {
 
@@ -268,6 +272,7 @@ public class MusicUtils {
 	}
 
 	public static IMediaPlaybackService sService = null;
+	private static HashMap<Context, ServiceBinder> sConnectionMap = new HashMap<Context, ServiceBinder>();
 
 	public static ServiceToken bindToService(Activity context, ServiceConnection callback) {
 		Activity realActivity = context.getParent();
@@ -277,7 +282,29 @@ public class MusicUtils {
 		ContextWrapper cw = new ContextWrapper(realActivity);
 		cw.startService(new Intent(cw, MediaPlaybackService.class));
 		ServiceBinder sb = new ServiceBinder(callback);
+		if (cw.bindService((new Intent()).setClass(cw, MediaPlaybackService.class), sb, 0)) {
+			sConnectionMap.put(cw, sb);
+			return new ServiceToken(cw);
+		}
+		Log.e("Music", "Failed to bind to service");
 		return null;
+	}
+
+	public static void unbindFromService(ServiceToken token) {
+		if (token == null) {
+			Log.e("MusicUtils", "Trying to unbind with null token");
+			return;
+		}
+		ContextWrapper cw = token.mWrappedContext;
+		ServiceBinder sb = sConnectionMap.remove(cw);
+		if (sb == null) {
+			Log.e("MusicUtils", "Trying to unbind with null token");
+			return;
+		}
+		cw.unbindService(sb);
+		if (sConnectionMap.isEmpty()) {
+			sService = null;
+		}
 	}
 
 	private static class ServiceBinder implements ServiceConnection {
@@ -291,47 +318,113 @@ public class MusicUtils {
 		public void onServiceConnected(ComponentName name, IBinder service) {
 			sService = IMediaPlaybackService.Stub.asInterface(service);
 			initAlbumArtCache();
+			if (mCallback != null) {
+				mCallback.onServiceConnected(name, service);
+			}
 		}
 
 		@Override
 		public void onServiceDisconnected(ComponentName name) {
-
+			if (mCallback != null) {
+				mCallback.onServiceDisconnected(name);
+			}
+			sService = null;
 		}
 
 	}
 
-	// private static Bitmap getArtWork(Context context, long song_id, long
-	// album_id) {
-	// Bitmap bm = null;
-	// if (albumid < 0 && songid < 0) {
-	// throw new IllegalArgumentException("Must specify an album or a song id");
-	//
-	// }
-	//
-	// try {
-	// if (albumid < 0) {
-	// Uri uri = Uri.parse("content://media/external/audio/media/" + songid +
-	// "albumart");
-	// /**
-	// * FileDescriptor对象。它代表了原始的Linux文件描述符，
-	// * 它可以被写入Parcel并在读取时返回一个ParcelFileDescriptor对象用于操作原始的文件描述符。
-	// * ParcelFileDescriptor是原始描述符的一个复制：对象和fd不同，但是都操作于同一文件流，
-	// * 使用同一个文件位置指针，等等。可以使用的方法是：writeFileDescriptor(FileDescriptor),
-	// * readFileDescriptor()。
-	// */
-	// ParcelFileDescriptor pfd =
-	// context.getContentResolver().openFileDescriptor(uri, "r");
-	// if (pfd != null) {
-	// FileDescriptor fd = pfd.getFileDescriptor();
-	// bm = BitmapFactory.decodeFileDescriptor(fd);
-	// } else {
-	// Uri uri = ContentUris.withAppendedId(sArtworkUri, albumid);
-	// }
-	// }
-	// } catch (FileNotFoundException e) {
-	// e.printStackTrace();
-	// }
-	// return null;
-	// }
+	public static Cursor query(Context context, Uri uri, String[] projection, String selection, String[] selectionArgs,
+			String sortOrder, int limit) {
+		try {
+			ContentResolver resolver = context.getContentResolver();
+			if (resolver == null) {
+				return null;
+			}
+			if (limit > 0) {
+				uri = uri.buildUpon().appendQueryParameter("limit", "" + limit).build();
+			}
+			return resolver.query(uri, projection, selection, selectionArgs, sortOrder);
+		} catch (UnsupportedOperationException ex) {
+			return null;
+		}
+
+	}
+
+	public static Cursor query(Context context, Uri uri, String[] projection, String selection, String[] selectionArgs,
+			String sortOrder) {
+		return query(context, uri, projection, selection, selectionArgs, sortOrder, 0);
+	}
+
+	public static long getCurrentAudioId() {
+		if (MusicUtils.sService != null) {
+			try {
+				return sService.getAudioId();
+			} catch (RemoteException ex) {
+			}
+		}
+		return -1;
+	}
+
+	private static ContentValues[] sContentValuesCache = null;
+
+	/**
+	 * @param ids
+	 *            The source array containing all the ids to be added to the
+	 *            playlist
+	 * @param offset
+	 *            Where in the 'ids' array we start reading
+	 * @param len
+	 *            How many items to copy during this pass
+	 * @param base
+	 *            The play order offset to use for this pass
+	 */
+	private static void makeInsertItems(long[] ids, int offset, int len, int base) {
+		// adjust 'len' if would extend beyond the end of the source array
+		if (offset + len > ids.length) {
+			len = ids.length - offset;
+		}
+		// allocate the ContentValues array, or reallocate if it is the wrong
+		// size
+		if (sContentValuesCache == null || sContentValuesCache.length != len) {
+			sContentValuesCache = new ContentValues[len];
+		}
+		// fill in the ContentValues array with the right values for this pass
+		for (int i = 0; i < len; i++) {
+			if (sContentValuesCache[i] == null) {
+				sContentValuesCache[i] = new ContentValues();
+			}
+
+			sContentValuesCache[i].put(MediaStore.Audio.Playlists.Members.PLAY_ORDER, base + offset + i);
+			sContentValuesCache[i].put(MediaStore.Audio.Playlists.Members.AUDIO_ID, ids[offset + i]);
+		}
+	}
+
+	public static void addToPlayList(Context context, long[] ids, int playlistid) {
+		if (ids == null) {
+			// this shouldn't happen (the menuitems shouldn't be visible
+			// unless the selected item represents something playable
+			Log.e("MusicBase", "ListSelection null");
+		} else {
+			int size = ids.length;
+			ContentResolver resolver = context.getContentResolver();
+			// need to determine the number of items currently in the playlist,
+			// so the play_order field can be maintained.
+			String[] cols = new String[] { "count(*)" };
+			Uri uri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistid);
+			Cursor cur = resolver.query(uri, cols, null, null, null);
+			cur.moveToFirst();
+			int base = cur.getInt(0);
+			cur.close();
+			int numinserted = 0;
+			for (int i = 0; i < size; i += 1000) {
+				makeInsertItems(ids, i, 1000, base);
+				numinserted += resolver.bulkInsert(uri, sContentValuesCache);
+			}
+			String message = context.getResources().getQuantityString(R.plurals.NNNtrackstoplaylist, numinserted,
+					numinserted);
+			Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+			// mLastPlaylistSelected = playlistid;
+		}
+	}
 
 }
