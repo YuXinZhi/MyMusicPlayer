@@ -4,20 +4,29 @@ import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.HashMap;
 
+import com.example.mymusicplayer.IMediaPlaybackService;
 import com.example.mymusicplayer.R;
+import com.example.mymusicplayer.service.MediaPlaybackService;
 import com.example.mymusicplayer.ui.MediaPlaybackActivity;
 
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
+import android.os.RemoteException;
 import android.provider.MediaStore;
 
 public class MusicUtils {
@@ -123,6 +132,9 @@ public class MusicUtils {
 	private static final BitmapFactory.Options sBitmapOptionsCache = new BitmapFactory.Options();
 	private static final BitmapFactory.Options sBitmapOptions = new BitmapFactory.Options();
 	private static Bitmap mCachedBit = null;
+
+	private static final HashMap<Long, Drawable> sArtCache = new HashMap<Long, Drawable>();
+	private static int sArtCacheId = -1;
 	static {
 		// for the cache,
 		// 565 is faster to decode and display
@@ -134,6 +146,24 @@ public class MusicUtils {
 		sBitmapOptions.inPreferredConfig = Bitmap.Config.RGB_565;
 		sBitmapOptions.inDither = false;
 
+	}
+
+	public static void initAlbumArtCache() {
+		try {
+			int id = sService.getMediaMountedCount();
+			if (id != sArtCacheId) {
+				clearAlbumArtCache();
+				sArtCacheId = id;
+			}
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static void clearAlbumArtCache() {
+		synchronized (sArtCache) {
+			sArtCache.clear();
+		}
 	}
 
 	/**
@@ -226,6 +256,48 @@ public class MusicUtils {
 	public static CharSequence makeTimeString(Context context, long secs) {
 
 		return null;
+	}
+
+	public static class ServiceToken {
+		ContextWrapper mWrappedContext;
+
+		public ServiceToken(ContextWrapper context) {
+			mWrappedContext = context;
+		}
+
+	}
+
+	public static IMediaPlaybackService sService = null;
+
+	public static ServiceToken bindToService(Activity context, ServiceConnection callback) {
+		Activity realActivity = context.getParent();
+		if (realActivity == null) {
+			realActivity = context;
+		}
+		ContextWrapper cw = new ContextWrapper(realActivity);
+		cw.startService(new Intent(cw, MediaPlaybackService.class));
+		ServiceBinder sb = new ServiceBinder(callback);
+		return null;
+	}
+
+	private static class ServiceBinder implements ServiceConnection {
+		ServiceConnection mCallback;
+
+		ServiceBinder(ServiceConnection callback) {
+			mCallback = callback;
+		}
+
+		@Override
+		public void onServiceConnected(ComponentName name, IBinder service) {
+			sService = IMediaPlaybackService.Stub.asInterface(service);
+			initAlbumArtCache();
+		}
+
+		@Override
+		public void onServiceDisconnected(ComponentName name) {
+
+		}
+
 	}
 
 	// private static Bitmap getArtWork(Context context, long song_id, long
