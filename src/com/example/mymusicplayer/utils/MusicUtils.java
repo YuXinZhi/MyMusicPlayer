@@ -223,6 +223,11 @@ public class MusicUtils {
 		return null;
 	}
 
+	public static CharSequence makeTimeString(Context context, long secs) {
+
+		return null;
+	}
+
 	// private static Bitmap getArtWork(Context context, long song_id, long
 	// album_id) {
 	// Bitmap bm = null;

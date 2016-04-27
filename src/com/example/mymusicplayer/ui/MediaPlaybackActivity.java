@@ -1,7 +1,5 @@
 package com.example.mymusicplayer.ui;
 
-import javax.security.auth.PrivateCredentialPermission;
-
 import com.example.mymusicplayer.IMediaPlaybackService;
 import com.example.mymusicplayer.R;
 import com.example.mymusicplayer.utils.MusicUtils;
@@ -31,11 +29,12 @@ import android.widget.TextView;
 
 public class MediaPlaybackActivity extends Activity
 		implements MusicUtils.Defs, View.OnTouchListener, View.OnLongClickListener {
-
+	private boolean mSeeking = false;
+	private long mStartSeekPos = 0;
+	private long mLastSeekEventTime;
 	private boolean mDeviceHasDpad;
 	private IMediaPlaybackService mService = null;
 	private boolean mFromTouch = false;
-	private long mLastSeekEventTime;
 	private long mDuration;
 	private Worker mAlbumArtWorker;
 	private AlbumArtHandler mAlbumArtHandler;
@@ -100,12 +99,123 @@ public class MediaPlaybackActivity extends Activity
 
 		if (mProgress instanceof SeekBar) {
 			SeekBar seeker = (SeekBar) mProgress;
-
+			// 设置进度条监听器
 			seeker.setOnSeekBarChangeListener(mSeekListener);
 		}
 
 	}
 
+	private RepeatingImageButton.RepeatListener mRewListener = new RepeatingImageButton.RepeatListener() {
+
+		@Override
+		public void onRepeat(View view, long duration, int repeatcount) {
+			scanBackward(repeatcount, duration);
+		}
+
+	};
+
+	private RepeatingImageButton.RepeatListener mFfwdListener = new RepeatingImageButton.RepeatListener() {
+		/**
+		 * view 作为按钮的view duration 按钮按下的时间 repeatcount 连续按下的次数
+		 */
+		@Override
+		public void onRepeat(View view, long duration, int repeatcount) {
+			scanForward(repeatcount, duration);
+		}
+	};
+
+	private void scanBackward(int repeatcount, long duration) {
+		if (mService == null) {
+			return;
+		}
+		try {
+			if (repeatcount == 0) {
+				mStartSeekPos = mService.position();
+				mLastSeekEventTime = 0;
+				mSeeking = false;
+			}
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void scanForward(int repeatcount, long duration) {
+
+	}
+
+	private View.OnClickListener mPauseListener = new View.OnClickListener() {
+
+		@Override
+		public void onClick(View v) {
+			doPauseResume();
+		}
+
+	};
+
+	private void doPauseResume() {
+		try {
+			if (mService != null) {
+				if (mService.isPlaying()) {
+					mService.pause();
+				} else {
+					mService.play();
+				}
+				refreshNow();
+				setPauseButtonImage();
+
+			}
+		} catch (RemoteException ex) {
+
+		}
+	}
+
+	// zhu暂停/播放按鈕
+	private void setPauseButtonImage() {
+		try {
+			if (mService != null && mService.isPlaying()) {
+				mPauseButton.setImageResource(android.R.drawable.ic_media_pause);
+			} else {
+				mPauseButton.setImageResource(android.R.drawable.ic_media_play);
+			}
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private View.OnClickListener mPrevListener = new View.OnClickListener() {
+
+		@Override
+		public void onClick(View v) {
+			if (mService == null) {
+				return;
+			}
+			try {
+				if (mService.position() < 2000) {
+					mService.prev();
+				} else {
+					mService.seek(0);
+					mService.play();
+				}
+			} catch (RemoteException e) {
+				e.printStackTrace();
+			}
+		}
+	};
+
+	private View.OnClickListener mNextListener = new View.OnClickListener() {
+
+		@Override
+		public void onClick(View v) {
+			if (mService == null) {
+				return;
+			}
+			try {
+				mService.next();
+			} catch (RemoteException e) {
+				e.printStackTrace();
+			}
+		}
+	};
 	// 歌曲进度条的监听
 	private OnSeekBarChangeListener mSeekListener = new OnSeekBarChangeListener() {
 
@@ -137,7 +247,6 @@ public class MediaPlaybackActivity extends Activity
 					refreshNow();
 					mPosOverride = -1;
 				}
-
 			}
 		}
 
